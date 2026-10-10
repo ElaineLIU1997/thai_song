@@ -211,8 +211,8 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
       <div class="media">
         <video id="media" playsinline preload="metadata" hidden></video>
         <div class="loadbox" id="loadbox">
-          <p><strong>Load your lyric video.</strong> Pick the screen recording of the song. It stays on this device, loads by itself next time, and is never uploaded.</p>
-          <label class="btn primary" for="file">Choose song file</label>
+          <p><strong>One step: pick your lyric video.</strong> On iPhone tap the button, then <b>Photo Library</b>, then your screen recording. The page turns every phrase into a timed card by itself (about a minute). The video stays on this phone and opens by itself next time.</p>
+          <label class="btn primary" for="file">Choose my video</label>
         </div>
         <input type="file" id="file" accept="audio/*,video/*" hidden>
       </div>
@@ -264,7 +264,7 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
     </div>
     <div class="banner" id="exampleBanner" hidden><b>These are example sentences.</b> Load your lyric video and press <b>📸 Cards from video</b> to get one card per phrase, timed to the song. To get word-by-word help as well, paste the Thai lines in the <b>Lyrics</b> tab.</div>
     <div class="lines" id="lines"></div>
-    <p class="note">Keys: <kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> line · <kbd>R</kbd> replay line · <kbd>L</kbd> repeat · <kbd>S</kbd> shadow. Tap any Thai word to see its letters and meaning.</p>
+    <p class="note">Keys: <kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> line · <kbd>R</kbd> replay line · <kbd>L</kbd> repeat · <kbd>S</kbd> shadow. Tap any Thai word to see its letters and meaning. <span class="label">Version 3</span></p>
   </section>
 
   <!-- SETUP -->
@@ -395,10 +395,11 @@ function useFile(blob, name, type) {
   media.playbackRate = S.prefs.speed;
   toast('Loaded ' + name);
 }
-$('#file').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; useFile(f, f.name, f.type); putFile(f); e.target.value = ''; });
+$('#file').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; useFile(f, f.name, f.type); putFile(f); e.target.value = '';
+  if (!(f.type || '').startsWith('audio') && !S.lines.some(l => l.pic)) runScan(true); });
 getFile().then(r => { if (r && r.blob) useFile(r.blob, r.name, r.type); });
 media.addEventListener('error', () => { if (media.src) toast('This browser cannot play that file. Try Chrome or Safari, or a different video format.'); });
-media.addEventListener('loadedmetadata', () => { const isVid = media.videoHeight > 0; media.classList.toggle('audio', !isVid); $('#fromVideo').hidden = !isVid; renderTime(); if (isVid) loadSnaps().then(fillMissingPictures); });
+media.addEventListener('loadedmetadata', () => { const isVid = media.videoHeight > 0; media.classList.toggle('audio', !isVid); $('#fromVideo').hidden = !isVid; renderTime(); if (isVid && !busy) loadSnaps().then(fillMissingPictures); });
 
 /* ---------- reading helpers ---------- */
 const isThai = s => /[฀-๿]/.test(s);
@@ -537,6 +538,7 @@ function boundary(i) {
   return false;
 }
 function frame() {
+  if (busy) { requestAnimationFrame(frame); return; }
   if (media.src && !media.paused && !syncing && cur >= 0) {
     const end = lineEnd(cur);
     if (end != null && media.currentTime >= end - 0.04 && S.lines[cur].start <= media.currentTime) {
@@ -559,7 +561,7 @@ function highlight(scroll) {
 }
 requestAnimationFrame(frame);
 
-$('#play').onclick = () => { if (needFile()) return; if (waiting) { cancelWait(); media.play(); return; } stopAfter = null; media.paused ? media.play().catch(() => {}) : media.pause(); };
+$('#play').onclick = () => { if (needFile()) return; if (busy) { toast('Making your cards… one moment'); return; } if (waiting) { cancelWait(); media.play(); return; } stopAfter = null; media.paused ? media.play().catch(() => {}) : media.pause(); };
 $('#replay').onclick = () => playLine(cur >= 0 ? cur : firstTimed(), !loop);
 const firstTimed = () => (timed()[0] || { i: -1 }).i;
 function step(d) {
@@ -786,19 +788,22 @@ async function loadSnaps() {
   for (const l of S.lines) if (l.pic && !snapURLs[l.id]) { const b = await getSnap(l.id); if (b) { snapURLs[l.id] = URL.createObjectURL(b); changed = true; } }
   if (changed) renderLines();
 }
-let probe = null;
-function probeVideo() {
-  if (probe && probe.src === media.src) return Promise.resolve(probe);
-  if (probe) probe.remove();
-  probe = document.createElement('video');
-  Object.assign(probe, { muted: true, playsInline: true, preload: 'auto', src: media.src });
-  probe.setAttribute('playsinline', ''); probe.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
-  document.body.appendChild(probe);
-  return new Promise((res, rej) => { probe.onloadeddata = () => res(probe); probe.onerror = () => rej(new Error('This file could not be read as a video.')); });
+let busy = false;
+// iPhone Safari only decodes frames after playback has started once; a muted play is allowed without a tap.
+async function readyVideo(v) {
+  if (v.readyState >= 2 && v.videoHeight) return;
+  v.muted = true;
+  try { await v.play(); } catch {}
+  v.pause();
+  if (v.readyState < 2) await new Promise(r => { v.addEventListener('loadeddata', r, { once: true }); setTimeout(r, 6000); });
 }
 function seekTo(v, t) {
-  return new Promise(res => { let done = false; const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); res(); };
-    v.addEventListener('seeked', fin); setTimeout(fin, 2000); v.currentTime = t; });
+  return new Promise(res => {
+    let done = false;
+    const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', onSeek); res(); };
+    const onSeek = () => { if (v.requestVideoFrameCallback) { v.requestVideoFrameCallback(fin); setTimeout(fin, 250); } else fin(); };
+    v.addEventListener('seeked', onSeek); setTimeout(fin, 1500); v.currentTime = t;
+  });
 }
 let scanCancel = false;
 function scanUI(msg, p, actions) {
@@ -808,11 +813,11 @@ function scanUI(msg, p, actions) {
 }
 // Sample the video, find the bright lyric panel, and mark every moment its text changes.
 async function scanVideo() {
-  const v = await probeVideo();
+  const v = media;
   const dur = v.duration, W = 160, H = Math.max(24, Math.round(160 * v.videoHeight / v.videoWidth));
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d', { willReadFrequently: true });
-  const step = 0.25, frames = [];
+  const step = 0.3, frames = [];
   for (let t = 0; t < dur - 0.05; t += step) {
     if (scanCancel) return null;
     await seekTo(v, t); g.drawImage(v, 0, 0, W, H);
@@ -853,8 +858,12 @@ async function scanVideo() {
   return { starts: starts.map(t => +t.toFixed(2)), pic };
 }
 async function capturePictures(list, quiet) {
-  if (!list.length || !media.src || media.videoHeight === 0) return;
-  const v = await probeVideo().catch(() => null); if (!v) return;
+  if (!list.length || !media.src) return;
+  const own = !busy; busy = true;
+  const v = media, back = v.currentTime, wasMuted = v.muted;
+  v.pause(); await readyVideo(v);
+  if (!v.videoHeight) { if (own) busy = false; v.muted = wasMuted; return; }
+  if (quiet) scanUI('Getting the phrase pictures ready…', 0, ' ');
   const c = document.createElement('canvas'), g = c.getContext('2d');
   for (let k = 0; k < list.length; k++) {
     const l = list[k], p = l.pic; if (!p || l.start == null) continue;
@@ -865,43 +874,61 @@ async function capturePictures(list, quiet) {
     g.drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
     const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
     if (blob) { await putSnap(l.id, blob); snapURLs[l.id] = URL.createObjectURL(blob); }
-    if (!quiet) scanUI(`Saving the picture for each phrase… ${k + 1} of ${list.length}`, (k + 1) / list.length, ' ');
+    scanUI(`Saving the picture for each phrase… ${k + 1} of ${list.length}`, (k + 1) / list.length, ' ');
   }
+  v.currentTime = back; v.muted = quiet ? wasMuted : false;
+  if (own) busy = false;
+  if (quiet) $('#scan').hidden = true;
   renderLines();
 }
 function fillMissingPictures() { const miss = S.lines.filter(l => l.pic && !snapURLs[l.id]); if (miss.length) capturePictures(miss, true); }
 let scanResult = null;
-$('#fromVideo').onclick = async () => {
-  if (needFile()) return;
-  scanCancel = false; media.pause(); cancelWait();
-  scanUI('Reading the video…', 0);
-  try { scanResult = await scanVideo(); } catch (err) { scanUI(esc(err.message || 'The video could not be read.'), 0, '<button class="btn sm" data-scan="close">Close</button>'); return; }
-  if (!scanResult) { $('#scan').hidden = true; return; }
-  const n = scanResult.starts.length, pasted = S.example ? 0 : S.lines.filter(l => l.th).length;
-  let msg = `Found <b>${n} phrases</b> in your video.`;
-  let actions = `<button class="btn sm primary" data-scan="make">Make ${n} cards</button>`;
-  if (pasted) {
-    msg += pasted === n ? ` That matches your ${pasted} pasted lines, so each card keeps its text.` : ` You have ${pasted} pasted lines, so they won't match up one to one.`;
-    if (pasted !== n) actions += `<button class="btn sm" data-scan="times">Only time my ${pasted} lines</button>`;
+async function runScan(auto) {
+  if (busy) return;
+  busy = true; scanCancel = false; cancelWait(); stopAfter = null;
+  scanUI('Getting your video ready…', 0);
+  try {
+    await readyVideo(media);
+    if (!media.videoHeight) { scanUI('This file has sound but no picture, so cards can’t be made from it.', 0, '<button class="btn sm" data-scan="close">Close</button>'); return; }
+    scanResult = await scanVideo();
+    if (!scanResult) { $('#scan').hidden = true; return; }
+    const n = scanResult.starts.length, pasted = S.example ? 0 : S.lines.filter(l => l.th).length;
+    if (auto && (!pasted || pasted === n)) { await makeCards(); return; }
+    let msg = `Found <b>${n} phrases</b> in your video.`;
+    let actions = `<button class="btn sm primary" data-scan="make">Make ${n} cards</button>`;
+    if (pasted) {
+      msg += pasted === n ? ` That matches your ${pasted} pasted lines, so each card keeps its text.` : ` You have ${pasted} pasted lines, so they won't match up one to one.`;
+      if (pasted !== n) actions += `<button class="btn sm" data-scan="times">Only time my ${pasted} lines</button>`;
+    }
+    scanUI(msg, 1, actions + '<button class="btn sm" data-scan="close">Cancel</button>');
+  } catch (err) {
+    scanUI(esc(err.message || 'The video could not be read.'), 0, '<button class="btn sm" data-scan="close">Close</button>');
+  } finally {
+    busy = false; media.muted = false;
   }
-  scanUI(msg, 1, actions + '<button class="btn sm" data-scan="close">Cancel</button>');
-};
-$('#scan').addEventListener('click', async e => {
-  const a = e.target.dataset.scan; if (!a) return;
-  if (a === 'cancel') { scanCancel = true; $('#scan').hidden = true; return; }
-  if (a === 'close') { $('#scan').hidden = true; return; }
+}
+async function makeCards() {
   const { starts, pic } = scanResult;
-  if (a === 'times') {
-    S.lines.forEach((l, k) => l.start = k < starts.length ? starts[k] : l.start);
-    save(); renderAll(); $('#scan').hidden = true; toast('Times added. Fix any card with − / + or Start = now.'); return;
-  }
   const old = S.example ? [] : S.lines.filter(l => l.th), keep = old.length === starts.length;
   S.lines = starts.map((t, k) => ({ id: uid(), th: keep ? old[k].th : '', vid: keep ? old[k].vid : '', mine: keep ? old[k].mine : '', en: keep ? old[k].en : '',
     start: t, st: keep ? old[k].st : 'new', pic }));
   S.example = false; cur = -1; save(); renderAll();
   await capturePictures(S.lines);
-  $('#scan').hidden = true;
-  toast(`${S.lines.length} cards ready. Press ▶ on any card to practise it.`);
+  media.currentTime = 0; media.muted = false;
+  $('#scan').hidden = true; showTab('practice');
+  toast(`${S.lines.length} phrase cards ready. Tap ▶ on a card to practise it.`);
+}
+$('#fromVideo').onclick = () => { if (needFile()) return; media.pause(); runScan(false); };
+$('#scan').addEventListener('click', async e => {
+  const a = e.target.dataset.scan; if (!a) return;
+  if (a === 'cancel') { scanCancel = true; $('#scan').hidden = true; return; }
+  if (a === 'close') { $('#scan').hidden = true; return; }
+  if (a === 'times') {
+    const { starts } = scanResult;
+    S.lines.forEach((l, k) => l.start = k < starts.length ? starts[k] : l.start);
+    save(); renderAll(); $('#scan').hidden = true; toast('Times added. Fix any card with − / + or Start = now.'); return;
+  }
+  if (a === 'make') { busy = true; try { await makeCards(); } finally { busy = false; } }
 });
 
 /* ---------- tabs, toast ---------- */
