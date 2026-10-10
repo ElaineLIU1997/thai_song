@@ -81,6 +81,9 @@ nav.tabs button[aria-selected="true"] { background: var(--surface); color: var(-
 .sync { margin-top: 8px; border-radius: var(--r); border: 1.5px solid var(--accent); background: var(--surface); padding: 12px; display: grid; gap: 8px; }
 .sync .tap { font-size: 18px; padding: 14px; border-radius: var(--r); border: 0; background: var(--accent); color: var(--on-accent); font-weight: 700; }
 .sync .next { font-size: 20px; }
+.shot { display: block; width: 100%; height: auto; border-radius: 8px; background: var(--sunk); border: 1px solid var(--line); }
+.shotmiss { font-size: 13px; color: var(--muted); background: var(--sunk); border-radius: 8px; padding: 10px 12px; }
+.scan .bar { flex: none; height: 8px; } .scan .bar i { background: var(--accent); }
 .sync .tap kbd { background: transparent; color: inherit; border-color: currentColor; }
 
 /* line cards */
@@ -208,7 +211,7 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
       <div class="media">
         <video id="media" playsinline preload="metadata" hidden></video>
         <div class="loadbox" id="loadbox">
-          <p><strong>Load the song from your device.</strong> Pick your screen recording or an audio file of the song. It plays only in your browser and is never uploaded.</p>
+          <p><strong>Load your lyric video.</strong> Pick the screen recording of the song. It stays on this device, loads by itself next time, and is never uploaded.</p>
           <label class="btn primary" for="file">Choose song file</label>
         </div>
         <input type="file" id="file" accept="audio/*,video/*" hidden>
@@ -228,6 +231,7 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
         <button class="btn" id="loop" title="Repeat the current line (L)">🔁 Repeat line</button>
         <button class="btn" id="shadow" title="Pause after each line so you can sing it back (S)">🎤 Shadow</button>
         <span class="spacer"></span>
+        <button class="btn" id="fromVideo" hidden>📸 Cards from video</button>
         <button class="btn" id="syncBtn">⏱ Time the lines</button>
         <label class="btn" for="file" id="changeFile" hidden>Change file</label>
       </div>
@@ -238,6 +242,13 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
         <button class="tap" id="tap">Tap when this line starts <kbd>Space</kbd></button>
         <div class="controls"><button class="btn sm" id="syncUndo">Undo last tap</button><button class="btn sm" id="syncRestart">Start over from 0:00</button><span class="spacer"></span><button class="btn sm" id="syncDone">Done</button></div>
         <div class="note">Play the song and tap the moment each line begins. You can fine-tune any line afterwards with the ± buttons on its card.</div>
+      </div>
+      <div class="sync scan" id="scan" hidden>
+        <div class="label">Making cards from your video</div>
+        <div id="scanMsg">Reading the video…</div>
+        <div class="bar"><i id="scanBar" style="width:0"></i></div>
+        <div class="controls" id="scanActions"></div>
+        <div class="note">This runs on your device. Nothing is uploaded.</div>
       </div>
       <div class="now" id="now"></div>
     </div>
@@ -251,7 +262,7 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
       <label><input type="checkbox" id="showEn" checked> Show English</label>
       <label>Pause length <select id="gap"><option value="1">1×</option><option value="1.3" selected>1.3×</option><option value="1.6">1.6×</option><option value="2">2×</option></select></label>
     </div>
-    <div class="banner" id="exampleBanner" hidden><b>These are example sentences.</b> Open the <b>Lyrics</b> tab and paste the song's lines to make your own cards.</div>
+    <div class="banner" id="exampleBanner" hidden><b>These are example sentences.</b> Load your lyric video and press <b>📸 Cards from video</b> to get one card per phrase, timed to the song. To get word-by-word help as well, paste the Thai lines in the <b>Lyrics</b> tab.</div>
     <div class="lines" id="lines"></div>
     <p class="note">Keys: <kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> line · <kbd>R</kbd> replay line · <kbd>L</kbd> repeat · <kbd>S</kbd> shadow. Tap any Thai word to see its letters and meaning.</p>
   </section>
@@ -260,7 +271,7 @@ kbd { font: 600 11px var(--f-ui); border: 1px solid var(--line); border-bottom-w
   <section id="setup" hidden>
     <div class="panel">
       <h2>Paste the lyrics</h2>
-      <p>Put one sentence per line. Copy the Thai lines from the lyric video or a lyrics site. If you also paste the video's pronunciation and English, keep the same line order and each line will match up. Leave a box empty if you don't have it. The app works out tone-marked pronunciation from the Thai on its own.</p>
+      <p>Already made picture cards from your video? Paste the lines in the same order and each card gets word-by-word help. Put one sentence per line. Copy the Thai lines from the lyric video or a lyrics site. If you also paste the video's pronunciation and English, keep the same line order and each line will match up. Leave a box empty if you don't have it. The app works out tone-marked pronunciation from the Thai on its own.</p>
       <div class="cols">
         <label>Thai <small>(required)</small><textarea id="inTh" class="thai" spellcheck="false"></textarea></label>
         <label>Pronunciation from the video <small>(optional)</small><textarea id="inRom" spellcheck="false"></textarea></label>
@@ -367,14 +378,14 @@ adopt(lsGet());
     if (!id) return;
     docRef = db.doc('data/users/' + id + '/song');
     const snap = await docRef.get();
-    if (snap.exists) { adopt(snap.data()); lsSet(S); renderAll(); setSave('Synced with your account'); }
+    if (snap.exists) { adopt(snap.data()); lsSet(S); renderAll(); loadSnaps().then(fillMissingPictures); setSave('Synced with your account'); }
     else if (!S.example) save();
   } catch { docRef = null; }
 })();
 
 /* ---------- song file (kept in this browser only) ---------- */
 const media = $('#media');
-function idb() { return new Promise((res, rej) => { const r = indexedDB.open('tidtidid', 1); r.onupgradeneeded = () => r.result.createObjectStore('files'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+function idb() { return new Promise((res, rej) => { const r = indexedDB.open('tidtidid', 2); r.onupgradeneeded = () => { const d = r.result; if (!d.objectStoreNames.contains('files')) d.createObjectStore('files'); if (!d.objectStoreNames.contains('snaps')) d.createObjectStore('snaps'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
 async function putFile(f) { try { const db = await idb(); db.transaction('files', 'readwrite').objectStore('files').put({ blob: f, name: f.name, type: f.type }, 'song'); } catch {} }
 async function getFile() { try { const db = await idb(); return await new Promise(res => { const q = db.transaction('files').objectStore('files').get('song'); q.onsuccess = () => res(q.result); q.onerror = () => res(null); }); } catch { return null; } }
 function useFile(blob, name, type) {
@@ -386,7 +397,8 @@ function useFile(blob, name, type) {
 }
 $('#file').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; useFile(f, f.name, f.type); putFile(f); e.target.value = ''; });
 getFile().then(r => { if (r && r.blob) useFile(r.blob, r.name, r.type); });
-media.addEventListener('loadedmetadata', () => { if (media.videoHeight === 0) media.classList.add('audio'); renderTime(); });
+media.addEventListener('error', () => { if (media.src) toast('This browser cannot play that file. Try Chrome or Safari, or a different video format.'); });
+media.addEventListener('loadedmetadata', () => { const isVid = media.videoHeight > 0; media.classList.toggle('audio', !isVid); $('#fromVideo').hidden = !isVid; renderTime(); if (isVid) loadSnaps().then(fillMissingPictures); });
 
 /* ---------- reading helpers ---------- */
 const isThai = s => /[฀-๿]/.test(s);
@@ -426,7 +438,7 @@ function chipsHTML(line, idx) {
 }
 function lineRom(line) {
   if (line.mine) return line.mine;
-  if (S.prefs.rom === 'video') return line.vid || '(no pronunciation pasted for this line)';
+  if (S.prefs.rom === 'video') return line.vid || (line.pic ? '' : '(no pronunciation pasted for this line)');
   return '';
 }
 const ST = { new: 'New', learning: 'Learning', got: 'Got it' };
@@ -438,15 +450,20 @@ function cardHTML(line, i, big) {
     <div class="meta"><span class="num">${i + 1}</span><span>${hasT ? fmt(line.start) : 'not timed yet'}</span>
       ${big ? '' : `<button class="btn sm" data-act="playline" ${hasT ? '' : 'disabled'} title="Play this line">▶</button>
       <button class="btn sm" data-act="nudge" data-d="-0.1" ${hasT ? '' : 'disabled'} title="Start 0.1s earlier">−</button><button class="btn sm" data-act="nudge" data-d="0.1" ${hasT ? '' : 'disabled'} title="Start 0.1s later">+</button>
-      <button class="btn sm" data-act="setnow" title="Set start to the current playback time">Start = now</button>`}
+      <button class="btn sm" data-act="setnow" title="Set start to the current playback time">Start = now</button>
+      ${line.pic ? `<button class="btn sm" data-act="split" ${hasT ? '' : 'disabled'} title="Make a new card starting at the current playback time">✂ Split here</button>` : ''}
+      ${i > 0 ? `<button class="btn sm" data-act="join" title="Join this card onto the one before it">Join ↑</button>` : ''}`}
       <span class="spacer"></span>
       <button class="status ${line.st}" data-act="status" title="Change status">${ST[line.st] || 'New'}</button>
       ${big ? '' : `<button class="btn sm" data-act="edit">Edit</button>`}
     </div>
-    <div class="chips">${chipsHTML(line, i)}</div>
+    ${line.pic && !big ? (snapURLs[line.id] ? `<img class="shot" src="${snapURLs[line.id]}" alt="Line ${i + 1} as shown in your video">` : `<div class="shotmiss">Load your video on this device to see this phrase's picture.</div>`) : ''}
+    ${line.th ? `<div class="chips">${chipsHTML(line, i)}</div>` : ''}
     ${lr ? `<div class="lrom rom">${esc(lr)}</div>` : ''}
-    ${S.prefs.showEn ? `<div class="en${line.en ? '' : ' empty'}">${line.en ? esc(line.en) : 'No English yet.'} <a class="ext" href="${tr}" target="_blank" rel="noopener">Translate ↗</a></div>` : ''}
+    ${S.prefs.showEn && (line.en || !line.pic) ? `<div class="en${line.en ? '' : ' empty'}">${line.en ? esc(line.en) : 'No English yet.'} ${line.th ? `<a class="ext" href="${tr}" target="_blank" rel="noopener">Translate ↗</a>` : ''}</div>` : ''}
+    ${big && line.pic && !line.th ? `<div class="note">Phrase ${i + 1} is on screen in the video above.</div>` : ''}
     <div class="editrow" hidden>
+      <label class="note">Thai text for word-by-word help<input data-f="th" class="thai" value="${esc(line.th)}"></label>
       <label class="note">Your pronunciation for this line (replaces the automatic one)<input data-f="mine" value="${esc(line.mine)}" placeholder="${esc(tokens(line.th).filter(t => t.thai).map(t => wordRom(t.w)).join(' '))}"></label>
       <label class="note">English meaning<input data-f="en" value="${esc(line.en)}"></label>
       <div><button class="btn sm primary" data-act="saveedit">Save</button></div>
@@ -460,7 +477,7 @@ function renderLines() {
 function renderNow() {
   const i = cur >= 0 ? cur : -1;
   $('#now').innerHTML = i >= 0 ? `<div class="big">${cardHTML(S.lines[i], i, true)}</div>`
-    : `<div class="empty-now">${S.lines.some(l => l.start != null) ? 'Press play. The current line shows here.' : 'Load the song, then use “Time the lines” so each card knows when it starts.'}</div>`;
+    : `<div class="empty-now">${S.lines.some(l => l.start != null) ? 'Press play. The current line shows here.' : 'Load your video, then press “📸 Cards from video”.'}</div>`;
 }
 function renderProgress() {
   const n = S.lines.length, g = S.lines.filter(l => l.st === 'got').length, l = S.lines.filter(l => l.st === 'learning').length;
@@ -587,6 +604,18 @@ document.addEventListener('click', e => {
   if (act === 'setnow') { if (needFile()) return; line.start = +media.currentTime.toFixed(2); save(); renderLines(); }
   if (act === 'status') { line.st = line.st === 'new' ? 'learning' : line.st === 'learning' ? 'got' : 'new'; save(); renderLines(); renderNow(); renderProgress(); }
   if (act === 'edit') { const r = card.querySelector('.editrow'); r.hidden = !r.hidden; if (!r.hidden) r.querySelector('input').focus(); }
+  if (act === 'join' && i > 0) {
+    const prev = S.lines[i - 1];
+    ['th', 'vid', 'en'].forEach(f => prev[f] = [prev[f], line[f]].filter(Boolean).join(' '));
+    S.lines.splice(i, 1); delete snapURLs[line.id]; cur = -1; save(); renderAll(); toast('Cards joined');
+  }
+  if (act === 'split') {
+    if (needFile()) return;
+    const t = +media.currentTime.toFixed(2), end = lineEnd(i) ?? Infinity;
+    if (!(t > line.start + 0.5 && t < end - 0.5)) { toast('Play this card first, then press Split at the moment the new phrase begins'); return; }
+    const nl = { id: uid(), th: '', vid: '', mine: '', en: '', start: t, st: 'new', pic: line.pic };
+    S.lines.splice(i + 1, 0, nl); save(); renderAll(); capturePictures([nl]); toast('Card split at ' + fmt(t));
+  }
   if (act === 'saveedit') { card.querySelectorAll('.editrow input').forEach(inp => line[inp.dataset.f] = inp.value.trim()); save(); renderLines(); renderNow(); toast('Line saved'); }
 });
 $('#romStyle').onclick = e => { const v = e.target.dataset.v; if (!v) return; S.prefs.rom = v; save(); renderAll(); };
@@ -674,11 +703,13 @@ $('#build').onclick = () => {
   const rows = [];
   th.forEach((t, k) => { if (t) rows.push({ th: t, vid: ro[k] || '', en: en[k] || '' }); });
   if (!rows.length) { toast('Paste at least one Thai line'); return; }
+  const picCount = S.lines.filter(l => l.pic).length;
+  if (picCount && picCount !== rows.length) toast(`You have ${picCount} picture cards and pasted ${rows.length} lines, so some will not match up. Use Join or Split to even them out.`);
   // When blank lines are skipped, re-pair the other boxes by non-empty order instead.
   const thN = th.filter(Boolean), roN = ro.filter(Boolean), enN = en.filter(Boolean);
   if (thN.length !== th.length) rows.forEach((r, k) => { r.vid = roN[k] || ''; r.en = enN[k] || ''; });
   const old = S.example ? [] : S.lines;
-  S.lines = rows.map((r, k) => { const o = old[k]; return { id: o?.id || uid(), th: r.th, vid: r.vid, mine: o && o.th === r.th ? o.mine : '', en: r.en, start: o ? o.start : null, st: o && o.th === r.th ? o.st : 'new' }; });
+  S.lines = rows.map((r, k) => { const o = old[k]; const same = o && (o.th === r.th || !o.th); return { id: o?.id || uid(), th: r.th, vid: r.vid, mine: same ? o.mine : '', en: r.en, start: o ? o.start : null, st: same ? o.st : 'new', pic: o?.pic || null }; });
   S.example = false; cur = -1; save(); renderAll(); showTab('practice');
   toast(`${S.lines.length} cards ready. Next: Time the lines.`);
 };
@@ -746,6 +777,133 @@ function openUses(tile) {
 }
 $('#consGrid').addEventListener('click', e => { const t = e.target.closest('.tile'); if (t) openUses(t); });
 
+/* ---------- cards from the video (runs on this device) ---------- */
+const snapURLs = {};
+async function putSnap(id, blob) { try { const db = await idb(); db.transaction('snaps', 'readwrite').objectStore('snaps').put(blob, id); } catch {} }
+async function getSnap(id) { try { const db = await idb(); return await new Promise(res => { const q = db.transaction('snaps').objectStore('snaps').get(id); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch { return null; } }
+async function loadSnaps() {
+  let changed = false;
+  for (const l of S.lines) if (l.pic && !snapURLs[l.id]) { const b = await getSnap(l.id); if (b) { snapURLs[l.id] = URL.createObjectURL(b); changed = true; } }
+  if (changed) renderLines();
+}
+let probe = null;
+function probeVideo() {
+  if (probe && probe.src === media.src) return Promise.resolve(probe);
+  if (probe) probe.remove();
+  probe = document.createElement('video');
+  Object.assign(probe, { muted: true, playsInline: true, preload: 'auto', src: media.src });
+  probe.setAttribute('playsinline', ''); probe.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+  document.body.appendChild(probe);
+  return new Promise((res, rej) => { probe.onloadeddata = () => res(probe); probe.onerror = () => rej(new Error('This file could not be read as a video.')); });
+}
+function seekTo(v, t) {
+  return new Promise(res => { let done = false; const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); res(); };
+    v.addEventListener('seeked', fin); setTimeout(fin, 2000); v.currentTime = t; });
+}
+let scanCancel = false;
+function scanUI(msg, p, actions) {
+  $('#scan').hidden = false; $('#scanMsg').innerHTML = msg;
+  if (p != null) $('#scanBar').style.width = Math.round(p * 100) + '%';
+  $('#scanActions').innerHTML = actions || '<button class="btn sm" data-scan="cancel">Cancel</button>';
+}
+// Sample the video, find the bright lyric panel, and mark every moment its text changes.
+async function scanVideo() {
+  const v = await probeVideo();
+  const dur = v.duration, W = 160, H = Math.max(24, Math.round(160 * v.videoHeight / v.videoWidth));
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  const step = 0.25, frames = [];
+  for (let t = 0; t < dur - 0.05; t += step) {
+    if (scanCancel) return null;
+    await seekTo(v, t); g.drawImage(v, 0, 0, W, H);
+    const d = g.getImageData(0, 0, W, H).data, gray = new Uint8Array(W * H);
+    for (let k = 0, j = 0; k < d.length; k += 4, j++) gray[j] = (d[k] * 3 + d[k + 1] * 6 + d[k + 2]) / 10;
+    frames.push({ t, gray });
+    if (frames.length % 8 === 0) scanUI(`Reading the video… ${fmtShort(t)} of ${fmtShort(dur)}`, t / dur);
+  }
+  if (frames.length < 4) return null;
+  // Lyric panel: the longest band of bright rows, inside the non-dark columns.
+  const rowM = new Float32Array(H), colM = new Float32Array(W);
+  for (const f of frames) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const val = f.gray[y * W + x]; rowM[y] += val; colM[x] += val; }
+  for (let y = 0; y < H; y++) rowM[y] /= frames.length * W;
+  for (let x = 0; x < W; x++) colM[x] /= frames.length * H;
+  let y0 = 0, y1 = 0, run = -1;
+  for (let y = 0; y <= H; y++) { if (y < H && rowM[y] > 165) { if (run < 0) run = y; } else if (run >= 0) { if (y - run > y1 - y0) { y0 = run; y1 = y; } run = -1; } }
+  if (y1 - y0 < H * 0.15) { y0 = Math.floor(H * 0.55); y1 = H; }
+  let x0 = 0, x1 = W; while (x0 < W / 3 && colM[x0] < 90) x0++; while (x1 > W * 2 / 3 && colM[x1 - 1] < 90) x1--;
+  const diffs = [];
+  for (let k = 1; k < frames.length; k++) {
+    const a = frames[k - 1].gray, b = frames[k].gray; let sum = 0, n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { sum += Math.abs(a[y * W + x] - b[y * W + x]); n++; }
+    diffs.push(sum / n);
+  }
+  const sorted = diffs.slice().sort((p, q) => p - q), median = sorted[Math.floor(sorted.length / 2)];
+  const th = Math.max(1.0, median * 10);
+  const starts = [0];
+  let lastChange = -9;
+  diffs.forEach((dv, k) => {
+    if (dv <= th) return;
+    const t = frames[k + 1].t;
+    if (t - lastChange > 0.8 && t - starts[starts.length - 1] >= 1.0) starts.push(t);
+    lastChange = t;
+  });
+  if (starts.length > 1 && dur - starts[starts.length - 1] < 1.0) starts.pop();
+  const ix = (x1 - x0) * 0.02;
+  const pic = { x: (x0 + ix) / W, y: y0 / H, w: (x1 - x0 - 2 * ix) / W, h: (y1 - y0) / H };
+  return { starts: starts.map(t => +t.toFixed(2)), pic };
+}
+async function capturePictures(list, quiet) {
+  if (!list.length || !media.src || media.videoHeight === 0) return;
+  const v = await probeVideo().catch(() => null); if (!v) return;
+  const c = document.createElement('canvas'), g = c.getContext('2d');
+  for (let k = 0; k < list.length; k++) {
+    const l = list[k], p = l.pic; if (!p || l.start == null) continue;
+    const i = S.lines.indexOf(l), end = (i >= 0 ? lineEnd(i) : null) ?? (l.start + 2);
+    await seekTo(v, Math.min(l.start + 2, l.start + (end - l.start) * 0.45));
+    const sx = p.x * v.videoWidth, sy = p.y * v.videoHeight, sw = p.w * v.videoWidth, sh = p.h * v.videoHeight;
+    c.width = Math.min(720, Math.round(sw)); c.height = Math.round(sh * c.width / sw);
+    g.drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
+    if (blob) { await putSnap(l.id, blob); snapURLs[l.id] = URL.createObjectURL(blob); }
+    if (!quiet) scanUI(`Saving the picture for each phrase… ${k + 1} of ${list.length}`, (k + 1) / list.length, ' ');
+  }
+  renderLines();
+}
+function fillMissingPictures() { const miss = S.lines.filter(l => l.pic && !snapURLs[l.id]); if (miss.length) capturePictures(miss, true); }
+let scanResult = null;
+$('#fromVideo').onclick = async () => {
+  if (needFile()) return;
+  scanCancel = false; media.pause(); cancelWait();
+  scanUI('Reading the video…', 0);
+  try { scanResult = await scanVideo(); } catch (err) { scanUI(esc(err.message || 'The video could not be read.'), 0, '<button class="btn sm" data-scan="close">Close</button>'); return; }
+  if (!scanResult) { $('#scan').hidden = true; return; }
+  const n = scanResult.starts.length, pasted = S.example ? 0 : S.lines.filter(l => l.th).length;
+  let msg = `Found <b>${n} phrases</b> in your video.`;
+  let actions = `<button class="btn sm primary" data-scan="make">Make ${n} cards</button>`;
+  if (pasted) {
+    msg += pasted === n ? ` That matches your ${pasted} pasted lines, so each card keeps its text.` : ` You have ${pasted} pasted lines, so they won't match up one to one.`;
+    if (pasted !== n) actions += `<button class="btn sm" data-scan="times">Only time my ${pasted} lines</button>`;
+  }
+  scanUI(msg, 1, actions + '<button class="btn sm" data-scan="close">Cancel</button>');
+};
+$('#scan').addEventListener('click', async e => {
+  const a = e.target.dataset.scan; if (!a) return;
+  if (a === 'cancel') { scanCancel = true; $('#scan').hidden = true; return; }
+  if (a === 'close') { $('#scan').hidden = true; return; }
+  const { starts, pic } = scanResult;
+  if (a === 'times') {
+    S.lines.forEach((l, k) => l.start = k < starts.length ? starts[k] : l.start);
+    save(); renderAll(); $('#scan').hidden = true; toast('Times added. Fix any card with − / + or Start = now.'); return;
+  }
+  const old = S.example ? [] : S.lines.filter(l => l.th), keep = old.length === starts.length;
+  S.lines = starts.map((t, k) => ({ id: uid(), th: keep ? old[k].th : '', vid: keep ? old[k].vid : '', mine: keep ? old[k].mine : '', en: keep ? old[k].en : '',
+    start: t, st: keep ? old[k].st : 'new', pic }));
+  S.example = false; cur = -1; save(); renderAll();
+  await capturePictures(S.lines);
+  $('#scan').hidden = true;
+  toast(`${S.lines.length} cards ready. Press ▶ on any card to practise it.`);
+});
+
 /* ---------- tabs, toast ---------- */
 function showTab(name) {
   document.querySelectorAll('nav.tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
@@ -756,7 +914,7 @@ document.querySelector('nav.tabs').onclick = e => { const t = e.target.dataset.t
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2400); }
 
-renderAll();
+renderAll(); loadSnaps();
 try { const t = sessionStorage.getItem('tidtidid-tab'); if (t) showTab(t); } catch {}
 if (location.hash === '#letters' || location.hash === '#setup') showTab(location.hash.slice(1));
 })();
